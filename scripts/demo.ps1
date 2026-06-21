@@ -50,10 +50,18 @@ try {
   # register: capture contract_id from the output (tolerant of re-runs)
   Write-Host "`n=== 4) register - publish intake_vault.wasm ===" -ForegroundColor Cyan
   $regOut = (& $tsx src/index.ts register 2>&1 | Out-String)
-  Write-Host $regOut
-  if ($ContractId -le 0) {
-    $m = [regex]::Match($regOut, '"contract_id"\s*:\s*(\d+)')
-    if ($m.Success) { $ContractId = [int]$m.Groups[1].Value }
+  $alreadyRegistered = $regOut -match 'not higher than current version'
+  if ($alreadyRegistered) {
+    # Benign on a re-run: the contract is already published at this version.
+    # Hide the raw HTTP 400 so the demo reads clean; show only the session info.
+    ($regOut -split "`n") | Where-Object { $_ -notmatch '^ERROR:' } | ForEach-Object { Write-Host $_.TrimEnd() }
+    Write-Host "(already registered at this version - reusing existing contract)" -ForegroundColor Yellow
+  } else {
+    Write-Host $regOut
+    if ($ContractId -le 0) {
+      $m = [regex]::Match($regOut, '"contract_id"\s*:\s*(\d+)')
+      if ($m.Success) { $ContractId = [int]$m.Groups[1].Value }
+    }
   }
   if ($ContractId -le 0) {
     throw "could not determine contract_id (already registered?). Re-run with -ContractId <int>."
