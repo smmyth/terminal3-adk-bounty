@@ -12,7 +12,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { connect, type Connection } from "./t3n";
-import { mintGrant } from "./grant";
+import { grantAgentAuth } from "./grant";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WASM_PATH = resolve(
@@ -20,7 +20,7 @@ const WASM_PATH = resolve(
   "../../../contracts/intake-vault/target/wasm32-wasip2/release/intake_vault.wasm"
 );
 const CONTRACT_TAIL = "intake-vault";
-const CONTRACT_VERSION = "0.1.0";
+const CONTRACT_VERSION = "0.2.1";
 
 function out(label: string, value: unknown): void {
   console.log(`\n${label}:`);
@@ -96,8 +96,11 @@ async function main(): Promise<void> {
           readers: onlyContract,
         }));
 
-        // Public map: redacted summaries + scores — public to read, but only the
-        // contract publishes to it.
+        // Public map: redacted summaries + scores, world-readable. NOTE: the
+        // T3N docs say public-map tails should begin with `public:`, but the
+        // SDK's maps.create rejects `:` in a tail, so we use a plain `summaries`
+        // tail with public visibility (see bug-report notes). Only the contract
+        // writes it; the world may read it.
         out("maps summaries", await createOrUpdate("summaries", {
           visibility: "public",
           writers: onlyContract,
@@ -162,32 +165,25 @@ async function main(): Promise<void> {
       break;
 
     case "grant":
-      // Mint a verifiable user→agent delegation credential authorising an agent
-      // key to call ONLY intake-vault's functions for a bounded window.
-      //   intake grant            (ephemeral agent key, 1h)
-      //   intake grant 7200       (ephemeral agent key, 2h)
-      // Optionally bind a specific agent key via T3N_AGENT_KEY.
-      await run(async ({ did }) => {
-        const ttlSecs = args[0] ? Number(args[0]) : undefined;
-        if (ttlSecs !== undefined && (!Number.isFinite(ttlSecs) || ttlSecs <= 0)) {
-          throw new Error("grant: ttl must be a positive number of seconds");
-        }
-        const result = mintGrant({
-          userDid: did,
-          tenantDid: did, // self-tenant: the operator's DID is the tenant DID
-          userKeyHex: process.env.T3N_DEV_KEY as string,
-          ttlSecs,
-          agentKeyHex: process.env.T3N_AGENT_KEY,
-        });
-        out("agent-auth grant (user-signed delegation credential)", result);
-        if (result.agent_secret_hex) {
-          out(
-            "note",
-            "Ephemeral agent key generated for this demo. The agent uses ONLY its " +
-              "private key per call; the credential proves the user authorised it. " +
-              "Do not reuse this key in production."
-          );
-        }
+      // Issue the documented agent-auth grant: the user signs a
+      // `tee:user/contracts::agent-auth-update` scoping an agent to ONLY this
+      // contract's functions. Defaults to a self-grant (agentDid = your DID);
+      // set T3N_AGENT_DID to authorise a separate agent identity.
+      // Requires the contract to be registered first (so its version resolves).
+      await run(async ({ client, did, nodeUrl }) => {
+        const result = await grantAgentAuth(
+          client as unknown as { execute(p: unknown): Promise<string> },
+          did,
+          nodeUrl,
+          process.env.T3N_AGENT_DID
+        );
+        out("agent-auth-update", result);
+        out(
+          "note",
+          result.selfGrant
+            ? "Self-grant issued (agentDid = your DID). The user authorised exactly these functions on this contract — nothing else."
+            : `Granted agent ${result.agentDid} access to these functions only.`
+        );
       });
       break;
 
@@ -205,7 +201,7 @@ Usage: intake <command> [args]   (requires T3N_DEV_KEY env var)
   summary <id>         Fetch the redacted public summary for a report
   logs                 Read the contract's in-enclave debug logs
   usage                Show token usage / balance
-  grant [ttlSecs]      Mint a user-signed agent delegation credential for intake-vault
+  grant                Issue the agent-auth-update grant (self-grant; set T3N_AGENT_DID to scope an agent)
 `);
   }
 }

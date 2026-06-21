@@ -2,18 +2,21 @@
 
 Environment: `@terminal3/t3n-sdk@3.5.2`, testnet SG node
 `https://cn-api.sg.testnet.t3n.terminal3.io`, tenant `testnet-dev` (`active`).
-All four were hit while wiring a real tenant contract + CLI end to end; each is
-reproducible, SDK-related, and requires a code/docs change to fix.
+Each item below was hit while wiring a real tenant contract + CLI end to end,
+is reproducible, and was validated against the official docs (so documented
+behaviour is not reported as a bug).
 
 ---
 
-## R-A — `TenantClient` silently needs `baseUrl`; only fails at call time
+## R-A — `TenantClient` requires `baseUrl` even though the SDK "resolves the cluster URL for every client"
 
-**Severity:** medium (DX / onboarding blocker)
+**Severity:** low/medium (API inconsistency / DX)
 
-`TenantClientConfig.baseUrl` is typed optional (`baseUrl?: string`) and the
-constructor accepts a config without it. The failure only appears when the first
-control-plane method is called:
+`TenantClientConfig.baseUrl` is typed optional (`baseUrl?: string`). The
+Set-up-dev-env doc constructs the client with `baseUrl: getNodeUrl()` and the
+comment states the SDK "resolves the cluster URL for every client, so you never
+hardcode a node URL." Yet omitting `baseUrl` does not fall back to the active
+environment — the first control-plane call throws:
 
 ```
 ERROR: TenantClient config requires baseUrl for tenant control operations
@@ -21,88 +24,88 @@ ERROR: TenantClient config requires baseUrl for tenant control operations
 
 **Repro:**
 ```ts
-const tenant = new TenantClient({ t3n: client, environment: "testnet", tenantDid });
-await tenant.tenant.me(); // throws "requires baseUrl for tenant control operations"
+setEnvironment("testnet");
+const tenant = new TenantClient({ t3n, tenantDid });   // no baseUrl
+await tenant.tenant.me();                               // throws: requires baseUrl
 ```
 
-**Expected:** either `baseUrl` is required in the type (non-optional, or a
-discriminated config), or the client defaults it from `environment` /
-`getNodeUrl()`. Today the optional type + deferred runtime error sends every new
-integrator down a debugging detour.
-
-**Fix:** default `baseUrl` from the resolved environment node URL, or make the
-control-plane config shape require it at construction.
+**Expected:** since `setEnvironment` already fixes the node URL (and `getNodeUrl()`
+returns it), `TenantClient` should default `baseUrl` from the active environment,
+or the type should make `baseUrl` required so the gap is caught at compile time
+rather than as a deferred runtime error.
 
 ---
 
-## R-B — `tenantScriptName` makes control-plane ops eagerly resolve the (unregistered) contract version → 404
+## R-B — Setting `tenantScriptName` breaks unrelated control-plane calls with a confusing 404
 
-**Severity:** medium (ordering trap)
+**Severity:** medium (footgun; undocumented side effect)
 
-Setting `tenantScriptName` in the `TenantClient` config causes control-plane
-calls that have nothing to do with the business contract (e.g. `tenant.me()`) to
-resolve the contract version up-front via `getScriptVersion`. Before the contract
-is registered this 404s:
+`TenantClientConfig.tenantScriptName` is an accepted, optional field. Setting it
+makes control-plane calls that have nothing to do with the business contract
+(e.g. `tenant.me()`) eagerly resolve the contract version via `getScriptVersion`.
+Before the contract is registered this 404s:
 
 ```
 ERROR: Failed to fetch current version for intake-vault: 404 Not Found
 ```
 
+The Set-up-dev-env doc constructs `TenantClient` WITHOUT `tenantScriptName`, so
+there is no documented warning that setting it changes the behaviour of
+`me()` / `maps.*` / `register`.
+
 **Repro:**
 ```ts
-const tenant = new TenantClient({ t3n: client, environment: "testnet",
-  baseUrl: nodeUrl, tenantDid, tenantScriptName: "intake-vault" });
-await tenant.tenant.me(); // 404 — me() should not need the script version
+const tenant = new TenantClient({ t3n, baseUrl: getNodeUrl(), tenantDid,
+  tenantScriptName: "intake-vault" });
+await tenant.tenant.me();   // 404 — me() should not resolve the contract version
 ```
 
-**Workaround:** omit `tenantScriptName`; `contracts.execute(tail, …)` takes the
-tail explicitly anyway.
-
-**Expected:** control-plane ops (`me`, `maps.*`, `contracts.register`) must not
-depend on resolving a business-contract version. Resolve it lazily, only inside
-`executeBusinessContract`.
+**Expected:** either control-plane ops must not depend on resolving a
+business-contract version, or the field's side effect should be documented (and
+ideally the version resolved lazily, only inside `executeBusinessContract`).
 
 ---
 
-## R-C — Private map `writers: { only: [] }` blocks the owning contract's own in-enclave writes (HTTP 403); chicken-and-egg with the contract id
+## R-C — Public-map naming: docs require a `public:` tail, but the SDK rejects `:` in a tail
 
-**Severity:** high (correctness + docs gap)
+**Severity:** high (docs ⇄ SDK contradiction; blocks a documented feature)
 
-Map write ACLs are enforced against the **contract's numeric identity**, including
-the contract's own in-enclave `kv-store::put`. A private map created with
-`writers: { only: [] }` (intuitively "no external writers") therefore blocks the
-contract that is supposed to own it:
+The docs are explicit that a world-readable map must use a `public:` tail:
+- Storage Namespaces: *"A tenant-public map must use both: `z:<tid>:public:<tail>` and visibility = Public."*
+- Create Tenant KV Maps: *"Map tail must start with `public:`."*
+
+But `maps.create` runs the tail through `validateTail`, whose regex rejects the
+colon, so the canonical public name cannot be created through the SDK:
 
 ```
-HTTP 403: {"code":"forbidden","detail":"access denied:
-TenantContract(did:t3n:…/411) cannot write map \"z:…:reports\""}
+ERROR: Tenant name tail must match /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,127}$/
 ```
-
-The contract id (`411`) is only known **after** `contracts.register`, but the map
-ACL must reference it — a chicken-and-egg the map-create docs don't call out, nor
-do they document that `writers`/`readers` `only` entries are numeric contract ids
-gating the contract's own KV access (not just external API callers).
 
 **Repro:**
-1. `maps.create({ tail: "reports", visibility: "private", writers: { only: [] }, readers: { only: [] } })`
-2. `contracts.register({ tail: "intake-vault", … })` → `contract_id: 411`
-3. invoke a function that does `kv_store::put("…:reports", …)` → **403**
-4. `maps.update("reports", { writers: { only: [411] }, readers: { only: [411] } })` → now succeeds
+```ts
+await tenant.maps.create({ tail: "public:summaries", visibility: "public",
+  writers: { only: [contractId] }, readers: "all" });
+// throws: Tenant name tail must match /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,127}$/
+```
 
-**Expected:** document that (a) `only` entries are numeric contract ids, (b) the
-owning contract must be listed to perform its own writes/reads, and (c) the
-register-before-lock ordering. Optionally auto-grant the owning contract.
+A plain tail with `visibility: "public"` (e.g. `summaries`) is accepted and is
+readable, but it does not match the documented `public:` canonical name.
+
+**Expected:** make `validateTail` allow the documented `public:` prefix (and/or
+the `:` separator for the public segment), OR correct the docs to describe the
+tail shape the SDK actually accepts for public maps and how the public segment
+is expressed.
 
 ---
 
-## R-D — Delegation credential `contract` field cap (46 chars) rejects the canonical tenant contract name (55 chars)
+## R-D — Delegation credential `contract` field cap (46 chars) rejects the canonical tenant name (55 chars)
 
-**Severity:** medium (feature gap / docs gap)
+**Severity:** medium (feature gap / undocumented cap)
 
-`buildDelegationCredential` / `validateCredentialBody` cap the `contract` field at
-**46 characters**. The canonical tenant contract name is `z:<40-hex-tid>:<tail>`
+`buildDelegationCredential` / `validateCredentialBody` cap the `contract` field
+at **46 characters**. The canonical tenant contract name `z:<40-hex-tid>:<tail>`
 — e.g. `z:fca4e60cf57534943ebc6bd835cd323c173a7e9e:intake-vault` = **55 chars** —
-so a delegation credential cannot bind to a tenant contract's canonical name:
+is rejected:
 
 ```
 Error: ContractTooLong
@@ -110,18 +113,14 @@ Error: ContractTooLong
   at buildDelegationCredential (…)
 ```
 
+Empirically: lengths ≤ 46 pass, ≥ 47 throw `ContractTooLong`. The cap is not
+documented in the public types/JSDoc.
+
 **Repro:**
 ```ts
-buildDelegationCredential({ /* … */, contract: canonicalTenantName(tenantDid, "intake-vault") });
-// throws ContractTooLong (contract.length === 55 > 46)
+buildDelegationCredential({ /* … */, contract: "z:" + "f".repeat(40) + ":intake-vault" });
+// throws ContractTooLong (length 55 > 46)
 ```
 
-Empirically: lengths ≤ 46 pass, ≥ 47 throw `ContractTooLong`.
-
-**Expected:** either raise the cap to fit a canonical tenant name
-(`z:` + 40 + `:` + tail), or document that delegation `contract` must be a short
-id (e.g. the tail) and that the tenant is identified separately via `org_did`.
-The cap is also undocumented in the public types/JSDoc.
-
-**Workaround used here:** bind the credential to the tail `intake-vault` and carry
-the tenant in `org_did`.
+**Expected:** either raise the cap to fit a canonical tenant name, or document
+that `contract` must be a short id and that the tenant is carried in `org_did`.

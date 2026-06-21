@@ -14,9 +14,9 @@ Terminal 3 Agent Dev Kit Bounty Challenge (Launch Ed) · Track: **Best Agent uti
 | Category | AI / AI Agents → Privacy → Identity ⚠️ *pick from the form's actual options* |
 | Is this BUIDL an AI Agent? | **Yes** |
 | Track | Best Agent utilising Terminal 3 Agent Auth SDK |
-| Source code | ⚠️ *push `terminal3-adk-bounty/` to a public repo and paste the URL* |
+| Source code | `https://github.com/smmyth/terminal3-adk-bounty` |
 | Demo video | ⚠️ *record the run-through (script in §8) and paste the link* |
-| Live demo / how to run | See §7 (one-command build + testnet CLI) |
+| Live demo / how to run | See §7 (one-command `scripts/demo.ps1` + testnet CLI) |
 | Team | ⚠️ *solo / add teammates* |
 | Contact | ⚠️ *your email / Telegram* |
 
@@ -32,7 +32,7 @@ Confidential Intake Vault removes that trade-off: it ingests a sensitive submiss
 
 ## 3. Why verifiable identity is core
 
-The vault acts on behalf of submitters and tenants, so "who did what, and were they allowed to" has to be provable, not assumed. Verifiable identity gives the agent a DID and a tenant identity that anchor every action: the private `reports` map and the public `summaries` map are gated by ACLs keyed to verified tenant/contract identity, and any access to a user's profile happens only under an explicit on-chain delegation grant — the agent never holds raw credentials. That's what lets confidentiality and auditability stop being a trade-off: every operation is attributable to a verified DID, and authorization is checked before any PII is touched.
+The vault acts on behalf of submitters and tenants, so "who did what, and were they allowed to" has to be provable, not assumed. Verifiable identity gives the agent a DID and a tenant identity that anchor every action: the private `reports` map and the public `summaries` map are gated by ACLs keyed to the verified contract identity, and the agent is authorized via an explicit, user-signed `agent-auth-update` grant scoping it to exactly this contract's functions — the agent never holds raw credentials. Every write to the confidential vault is gated by a verified `calling-user-did` and stamped with the submitter DID. That's what lets confidentiality and auditability stop being a trade-off: every operation is attributable to a verified DID, and authorization is checked before any PII is touched.
 
 ---
 
@@ -44,16 +44,19 @@ Full SDK surface exercised end to end (`apps/agent-cli`):
 |---|---|---|
 | Testnet auth + DID | `setEnvironment("testnet")`, `loadWasmComponent`, `T3nClient`, `createEthAuthInput`, `metamask_sign`, `client.handshake()`, `client.authenticate()` | `intake auth` |
 | Tenant status + quotas | `TenantClient.tenant.me()` | `intake me` |
-| Tenant maps + ACLs | `TenantClient.maps.create({ visibility, writers, readers })` — private `reports` + public `summaries` | `intake init-maps` |
 | Contract register (WASM upload) | `TenantClient.contracts.register({ tail, version, wasm })` | `intake register` |
+| Tenant maps + ACLs | `TenantClient.maps.create / update({ visibility, writers, readers })` — private `reports` + public `summaries`, locked to the contract id | `intake init-maps <id>` |
+| **Agent authorization** | `client.execute({ script_name: "tee:user/contracts", function_name: "agent-auth-update", … })` + `getScriptVersion` | `intake grant` |
 | Contract invoke | `TenantClient.contracts.execute(tail, { version, functionName, input })` | `intake submit` / `score` / `summary` |
 | In-enclave logs | `TenantClient.contracts.logs(tail)` | `intake logs` |
 | Token usage accounting | `TenantClient.token.getUsage()` | `intake usage` |
-| **Agent delegation credential** | `buildDelegationCredential` + `canonicaliseCredential` + `signCredential` (EIP-191/JCS) | `intake grant` |
 
 Plus a contract-side authorisation gate: `submit-report` requires a verified
 `tenant-context.calling-user-did()` and refuses anonymous invocations, stamping
-every stored report with the submitter DID for audit.
+every stored report with the submitter DID for audit. The `grant` command issues
+the documented `tee:user/contracts::agent-auth-update` (a self-grant by default;
+set `T3N_AGENT_DID` to scope a separate agent) — verified live, it returns an
+on-chain `tx_hash`.
 
 The CLI **typechecks against the real `@terminal3/t3n-sdk@3.5.2` types** (`tsc --noEmit` passes). It deliberately pins `setEnvironment("testnet")` before constructing any client rather than inheriting the SDK's production default.
 
@@ -63,10 +66,11 @@ The CLI **typechecks against the real `@terminal3/t3n-sdk@3.5.2` types** (`tsc -
 
 ```
 Agent CLI (Node/TS, @terminal3/t3n-sdk)
-   │  auth → DID  ·  register contract  ·  create maps  ·  invoke  ·  logs  ·  usage
+   │  auth → DID · register contract · lock maps to contract id · agent-auth-update · invoke · logs · usage
    ▼
-intake-vault  (Rust → wasm32-wasip2, runs inside the Trinity TEE)
-   ├─ submit-report : write RAW submission → z:<tid>:reports (private)   ← PII stays here
+intake-vault  (Rust → wasm32-wasip2, runs inside the Trinity TEE; tenant-base world)
+   ├─ submit-report : require verified calling-user-did (else reject)
+   │                  write RAW submission + submitter DID → z:<tid>:reports (private)  ← PII stays here
    │                  compute score + redact → z:<tid>:summaries (public)
    │                  return ONLY { id, score, severity, redacted_summary, submitted_at }
    ├─ score-report  : read raw in-enclave → return { id, score, breakdown }
@@ -84,8 +88,8 @@ Privacy invariant: the raw submission body never crosses the WIT boundary back t
 
 - ✅ **TEE contract** (`contracts/intake-vault`): compiles to `wasm32-wasip2` (~170 KB, under the 1 MB tenant quota); **9 native unit tests pass**.
 - ✅ **Agent CLI** (`apps/agent-cli`): 10 commands wired to the real tenant SDK API; typechecks clean against `@terminal3/t3n-sdk@3.5.2`.
-- ✅ **Verified live on testnet** (SG node, tenant `testnet-dev` `active`): full flow `auth → me → grant → register (contract_id 411) → init-maps 411 → submit → summary → score → logs → usage`. `submit` returned score 100 with e-mail/phone/passport masked; `logs` show only the submitter DID + score (no PII).
-- ✅ **Agent-auth**: `submit-report` gates on a verified `calling-user-did`; `intake grant` mints + user-signs a real delegation credential — the EIP-191 signature recovers the signer's address.
+- ✅ **Verified live on testnet** (SG node, tenant `testnet-dev` `active`): full flow `auth → me → register (contract_id 423) → init-maps 423 → grant → submit → summary → score → logs → usage`. `grant` issued a real `agent-auth-update` (on-chain `tx_hash` returned); `submit` returned score 100 with e-mail/phone/passport masked; `logs` show only the submitter DID + score (no PII).
+- ✅ **Agent-auth**: `submit-report` gates on a verified `calling-user-did`; `intake grant` issues the documented `tee:user/contracts::agent-auth-update`, scoping the agent to this contract's functions only.
 - ✅ **ACLs hardened + runtime-enforced**: private `reports` is locked to the contract id for read **and** write; `summaries` is read-all / contract-write-only. (A write before locking returned HTTP 403 — proof the runtime enforces it.)
 
 ---
@@ -95,13 +99,15 @@ Privacy invariant: the raw submission body never crosses the WIT boundary back t
 ```bash
 # Contract (verified)
 cd contracts/intake-vault
-cargo test --lib --target x86_64-pc-windows-msvc   # 7 passed
+cargo test --lib --target x86_64-pc-windows-msvc   # 9 passed
 cargo build --target wasm32-wasip2 --release       # -> target/wasm32-wasip2/release/intake_vault.wasm
 
-# Agent (testnet) — Node >=18; export the dev key, never hardcode it
+# Agent (testnet) — Node >=18; key via env or apps/agent-cli/.env, never hardcoded
 cd ../../apps/agent-cli && npm install
 export T3N_DEV_KEY=0x...        # PowerShell: $env:T3N_DEV_KEY="0x..."
-npm run intake -- auth
+
+# One command, full flow (auto-captures contract_id; re-run with -ContractId <id>)
+pwsh -File ../../scripts/demo.ps1
 ```
 
 ---
@@ -110,14 +116,16 @@ npm run intake -- auth
 
 1. `intake auth` → prints DID + `env: testnet` (proves identity + correct network).
 2. `intake me` → tenant status `active` + quotas.
-3. `intake grant` → mints a user-signed agent delegation credential scoped to intake-vault (show the recovered signer address matches the user).
-4. `intake register` → publishes `intake_vault.wasm`, prints `contract_id`.
-5. `intake init-maps <contractId>` → creates + locks contract-only private `reports` and public-read `summaries` to that id.
+3. `intake register` → publishes `intake_vault.wasm`, prints `contract_id`.
+4. `intake init-maps <contractId>` → creates + locks contract-only private `reports` and public-read `summaries` to that id.
+5. `intake grant` → issues a real `agent-auth-update` scoping the agent to this contract's functions (returns an on-chain `tx_hash`).
 6. `intake submit '{"id":"r1","title":"Auth bypass","body":"Steps to reproduce ... contact jane@example.com phone 441234567890 passport AB1234567","severity":"high","contact":"jane@example.com"}'`
    → returns `{ score, redacted_summary }` with the e-mail, phone and passport **masked**.
 7. `intake summary r1` → the public redacted summary (structured identifiers masked).
 8. `intake logs` → only `report r1 stored by <did> score=100`; the raw body / e-mail / phone never appear.
 9. `intake usage` → token accounting.
+
+(Or just run `pwsh -File scripts/demo.ps1` — it does all ten steps labelled, in order.)
 
 The "aha": the structured identifiers and the raw body never appear in the output or logs, yet the agent still scored and summarized the report — and the write was gated by a verified caller DID.
 
@@ -135,9 +143,9 @@ Four SDK issues were found and reproduced during the live testnet integration,
 each requiring a code/docs change — full reports with reproductions in
 [`reports/sdk-findings-live-run.md`](reports/sdk-findings-live-run.md):
 
-- **R-A** `TenantClient` needs `baseUrl` (typed optional) but only fails at call time.
-- **R-B** `tenantScriptName` makes control-plane ops eagerly resolve the unregistered contract version → 404.
-- **R-C** a private map's `writers: { only: [] }` blocks the owning contract's own in-enclave writes (HTTP 403); the numeric-contract-id ACL semantics + register-before-lock ordering are undocumented.
+- **R-A** `TenantClient` requires `baseUrl` even though `setEnvironment` already fixes the node URL; the type marks it optional and it only fails at call time.
+- **R-B** setting the optional `tenantScriptName` makes unrelated control-plane ops eagerly resolve the unregistered contract version → confusing 404.
+- **R-C** docs require a `public:` tail for public maps, but the SDK's `maps.create` (`validateTail`) rejects `:` in a tail — docs ⇄ SDK contradiction.
 - **R-D** delegation credential `contract` field cap (46 chars) rejects the 55-char canonical tenant name (`ContractTooLong`); cap is undocumented.
 
 ---

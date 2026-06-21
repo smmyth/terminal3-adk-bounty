@@ -1,4 +1,4 @@
-# intake-vault — v0.1.0
+# intake-vault — v0.2.1
 
 Confidential Intake Vault TEE contract for Trinity z-namespace tenants.
 
@@ -10,13 +10,16 @@ the redacted summary + score do.
 
 ## Capabilities (WIT imports — no separate manifest)
 
-`wit/world.wit` imports exactly what the contract uses:
+`wit/world.wit` imports exactly what the contract uses — the `tenant-base` world:
 
-- `host:tenant/tenant-context` — tenant DID (namespaces the KV maps) + cluster timestamp
-- `host:interfaces/logging` — debug/info/error (raw submission is never logged)
+- `host:tenant/tenant-context` — tenant DID (namespaces the KV maps), cluster timestamp, and `calling-user-did` (the authenticated caller, used for the auth gate)
+- `host:interfaces/logging` — debug/info/error (raw submission is never logged; only the submitter DID + score are)
 - `host:interfaces/kv-store` — `reports` (raw, private) and `summaries` (redacted, public) maps
 
 No HTTP / external API is needed — the privacy demo is fully self-contained.
+Privileged interfaces (signing, authorisation, user-profile) are never linked
+into tenant worlds, so authorization here uses `calling-user-did`, not
+`host:interfaces/authorisation`.
 
 ## Exported functions
 
@@ -26,27 +29,32 @@ No HTTP / external API is needed — the privacy demo is fully self-contained.
 | `score-report` | `{ id }` | `{ id, score, breakdown }` |
 | `get-summary` | `{ id }` | `{ id, score, severity, redacted_summary, submitted_at }` |
 
+`submit-report` **requires a verified `calling-user-did`** (rejects anonymous
+invocations) and stamps the stored record with the submitter DID for audit.
 `score` is a 0–100 completeness score (title / detail / severity / repro-steps /
-contact). `redacted_summary` masks e-mail-looking tokens and long digit runs
-(phone / passport / card / account numbers) and is length-capped.
+contact). `redacted_summary` masks **structured identifiers** — e-mail tokens and
+long digit runs (phone / passport / card / account numbers) — and is
+length-capped. Free-text PII such as names is out of scope (a unit test pins this).
 
 ## Build & test
 
 ```bash
-cargo test --lib --target x86_64-pc-windows-msvc   # 7 passed — pure score + redact logic
+cargo test --lib --target x86_64-pc-windows-msvc   # 9 passed — score + redaction logic
 cargo build --target wasm32-wasip2 --release       # -> target/wasm32-wasip2/release/intake_vault.wasm
 ```
 
 > The native test command uses an explicit `--target <host-triple>` because
-> `.cargo/config.toml` defaults the build target to `wasm32-wasip2` (see bug
-> report R4 — `cargo test --lib` alone is compiled for wasm and never runs).
+> `.cargo/config.toml` defaults the build target to `wasm32-wasip2` (`cargo test
+> --lib` alone is compiled for wasm and never runs).
 
 ## Setup (maps)
 
-The tenant SDK creates the maps before first use (see `apps/agent-cli`):
+The tenant SDK creates and locks the maps to the registered contract id before
+first use (see `apps/agent-cli`):
 
 ```text
-intake init-maps   # reports (private) + summaries (public)
+intake register        # prints contract_id
+intake init-maps <id>  # reports (private) + summaries (public), writers/readers locked to <id>
 ```
 
 The contract derives the physical map names at runtime as `z:<tid>:reports` and

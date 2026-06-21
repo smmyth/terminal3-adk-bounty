@@ -59,6 +59,17 @@ struct ScoreResult {
 const SUMMARY_MAX_CHARS: usize = 280;
 const VALID_SEVERITIES: [&str; 4] = ["low", "medium", "high", "critical"];
 
+/// Tenant-local map tails. The redacted summaries map is created with
+/// `visibility: "public"` so it is world-readable, while raw PII-bearing state
+/// lives in a private map. NOTE: the T3N docs say a public map's tail should
+/// begin with `public:` (`z:<tid>:public:<tail>`), but the SDK's `maps.create`
+/// rejects `:` in a tail (`validateTail` regex), so the canonical public name
+/// is not reachable through the SDK — see the bug-report notes. We therefore
+/// use a plain `summaries` tail with public visibility. Tails must match
+/// exactly what the tenant SDK creates (`init-maps`).
+const REPORTS_TAIL: &str = "reports";
+const SUMMARIES_TAIL: &str = "summaries";
+
 // ---------------------------------------------------------------------------
 // Pure helpers (host-independent, unit-tested natively)
 // ---------------------------------------------------------------------------
@@ -245,8 +256,8 @@ fn submit_report_wasm(sub: Submission) -> Result<Vec<u8>, String> {
     })?;
     let caller_hex = hex::encode(&caller);
 
-    let reports_map = tenant_map("reports");
-    let summaries_map = tenant_map("summaries");
+    let reports_map = tenant_map(REPORTS_TAIL);
+    let summaries_map = tenant_map(SUMMARIES_TAIL);
     let submitted_at = tenant_context::cluster_timestamp_secs();
 
     // 1) Persist the RAW submission + submitter identity to the tenant-private
@@ -286,7 +297,7 @@ fn submit_report_wasm(sub: Submission) -> Result<Vec<u8>, String> {
 
 #[cfg(target_arch = "wasm32")]
 fn score_report_wasm(req: IdReq) -> Result<Vec<u8>, String> {
-    let reports_map = tenant_map("reports");
+    let reports_map = tenant_map(REPORTS_TAIL);
     let raw = kv_store::get(&reports_map, req.id.as_bytes())
         .map_err(|e| format!("kv get reports: {e}"))?
         .ok_or_else(|| format!("report {} not found", req.id))?;
@@ -302,7 +313,7 @@ fn score_report_wasm(req: IdReq) -> Result<Vec<u8>, String> {
 
 #[cfg(target_arch = "wasm32")]
 fn get_summary_wasm(req: IdReq) -> Result<Vec<u8>, String> {
-    let summaries_map = tenant_map("summaries");
+    let summaries_map = tenant_map(SUMMARIES_TAIL);
     kv_store::get(&summaries_map, req.id.as_bytes())
         .map_err(|e| format!("kv get summaries: {e}"))?
         .ok_or_else(|| format!("summary {} not found", req.id))

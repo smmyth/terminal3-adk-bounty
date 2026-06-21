@@ -45,10 +45,9 @@ try {
 
   Step "1) auth - DID + testnet" @("auth")
   Step "2) me - tenant status + quotas" @("me")
-  Step "3) grant - user-signed agent delegation credential" @("grant")
 
   # register: capture contract_id from the output (tolerant of re-runs)
-  Write-Host "`n=== 4) register - publish intake_vault.wasm ===" -ForegroundColor Cyan
+  Write-Host "`n=== 3) register - publish intake_vault.wasm ===" -ForegroundColor Cyan
   $regOut = (& $tsx src/index.ts register 2>&1 | Out-String)
   $alreadyRegistered = $regOut -match 'not higher than current version'
   if ($alreadyRegistered) {
@@ -68,7 +67,8 @@ try {
   }
   Write-Host "contract_id = $ContractId" -ForegroundColor Green
 
-  Step "5) init-maps - lock reports/summaries ACLs to the contract id" @("init-maps", "$ContractId")
+  Step "4) init-maps - lock reports + summaries ACLs to the contract id" @("init-maps", "$ContractId")
+  Step "5) grant - agent-auth-update scoping the agent to this contract" @("grant")
 
   $body = '{"id":"' + $ReportId + '","title":"Auth bypass","body":"Steps to reproduce: open the login page then replay the token. contact jane@example.com phone 441234567890 passport AB1234567","severity":"high","contact":"jane@example.com"}'
   # Write to a temp file and pass via @file to dodge cmd.exe quote mangling.
