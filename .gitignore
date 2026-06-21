@@ -9,3 +9,6 @@
 .env
 *.key
 T3N_DEV_KEY*
+
+# Tenant-specific runtime state (not a secret, but per-tenant)
+.contract-id

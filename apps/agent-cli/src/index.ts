@@ -8,7 +8,7 @@
 // T3N_DEV_KEY. Raw submissions go to the private `reports` map inside the
 // enclave; only redacted summaries + scores ever come back.
 
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { connect, type Connection } from "./t3n";
@@ -21,6 +21,18 @@ const WASM_PATH = resolve(
 );
 const CONTRACT_TAIL = "intake-vault";
 const CONTRACT_VERSION = "0.2.1";
+// Where `register` persists the allocated contract id so later steps (init-maps)
+// and re-runs can find it without re-registering. Gitignored, tenant-specific.
+const CONTRACT_ID_FILE = resolve(HERE, "..", ".contract-id");
+
+async function readSavedContractId(): Promise<number | undefined> {
+  try {
+    const n = Number((await readFile(CONTRACT_ID_FILE, "utf8")).trim());
+    return Number.isInteger(n) && n > 0 ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function out(label: string, value: unknown): void {
   console.log(`\n${label}:`);
@@ -69,11 +81,14 @@ async function main(): Promise<void> {
       // Without an id the maps are created locked to nobody (safe but the
       // contract cannot use them until you re-run with the id).
       await run(async ({ tenant }) => {
-        const contractId = args[0] ? Number(args[0]) : undefined;
-        if (args[0] && !Number.isInteger(contractId)) {
-          throw new Error("init-maps: contractId must be an integer (see `register` output)");
+        const contractId =
+          args[0] !== undefined ? Number(args[0]) : await readSavedContractId();
+        if (contractId === undefined || !Number.isInteger(contractId)) {
+          throw new Error(
+            "init-maps: no contract id. Run `register` first (it saves the id), or pass it explicitly: init-maps <contractId>."
+          );
         }
-        const onlyContract = contractId !== undefined ? { only: [contractId] } : { only: [] };
+        const onlyContract = { only: [contractId] };
 
         // Create the map, or update it in place if it already exists.
         const createOrUpdate = async (
@@ -112,11 +127,17 @@ async function main(): Promise<void> {
     case "register":
       await run(async ({ tenant }) => {
         const wasm = new Uint8Array(await readFile(WASM_PATH));
-        out("register", await tenant.contracts.register({
+        const reg = await tenant.contracts.register({
           tail: CONTRACT_TAIL,
           version: CONTRACT_VERSION,
           wasm,
-        }));
+        });
+        out("register", reg);
+        const id = (reg as { contract_id?: number }).contract_id;
+        if (typeof id === "number") {
+          await writeFile(CONTRACT_ID_FILE, String(id), "utf8");
+          out("saved", `contract_id ${id} -> ${CONTRACT_ID_FILE}`);
+        }
       });
       break;
 

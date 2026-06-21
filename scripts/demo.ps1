@@ -8,8 +8,9 @@
   Usage (PowerShell 7):
       $env:T3N_DEV_KEY = "0x<your-testnet-dev-key>"
       pwsh -File scripts/demo.ps1
-      # re-run after the contract is already registered:
-      pwsh -File scripts/demo.ps1 -ContractId 411
+      # register saves the contract id to apps/agent-cli/.contract-id, so re-runs
+      # just work. Override the id explicitly if you ever need to:
+      pwsh -File scripts/demo.ps1 -ContractId 423
 
   Never hardcode the key. Rotate it after recording.
 #>
@@ -46,28 +47,21 @@ try {
   Step "1) auth - DID + testnet" @("auth")
   Step "2) me - tenant status + quotas" @("me")
 
-  # register: capture contract_id from the output (tolerant of re-runs)
+  # register persists the allocated contract id to apps/agent-cli/.contract-id;
+  # init-maps reads it. On a re-run at the same version, register reports a
+  # benign "version not higher" — we hide the raw 400 and reuse the saved id.
   Write-Host "`n=== 3) register - publish intake_vault.wasm ===" -ForegroundColor Cyan
   $regOut = (& $tsx src/index.ts register 2>&1 | Out-String)
-  $alreadyRegistered = $regOut -match 'not higher than current version'
-  if ($alreadyRegistered) {
-    # Benign on a re-run: the contract is already published at this version.
-    # Hide the raw HTTP 400 so the demo reads clean; show only the session info.
+  if ($regOut -match 'not higher than current version') {
     ($regOut -split "`n") | Where-Object { $_ -notmatch '^ERROR:' } | ForEach-Object { Write-Host $_.TrimEnd() }
-    Write-Host "(already registered at this version - reusing existing contract)" -ForegroundColor Yellow
+    Write-Host "(already registered at this version - reusing the saved contract id)" -ForegroundColor Yellow
   } else {
     Write-Host $regOut
-    if ($ContractId -le 0) {
-      $m = [regex]::Match($regOut, '"contract_id"\s*:\s*(\d+)')
-      if ($m.Success) { $ContractId = [int]$m.Groups[1].Value }
-    }
   }
-  if ($ContractId -le 0) {
-    throw "could not determine contract_id (already registered?). Re-run with -ContractId <int>."
-  }
-  Write-Host "contract_id = $ContractId" -ForegroundColor Green
 
-  Step "4) init-maps - lock reports + summaries ACLs to the contract id" @("init-maps", "$ContractId")
+  $initArgs = @("init-maps")
+  if ($ContractId -gt 0) { $initArgs += "$ContractId" }
+  Step "4) init-maps - lock reports + summaries ACLs to the contract id" $initArgs
   Step "5) grant - agent-auth-update scoping the agent to this contract" @("grant")
 
   $body = '{"id":"' + $ReportId + '","title":"Auth bypass","body":"Steps to reproduce: open the login page then replay the token. contact jane@example.com phone 441234567890 passport AB1234567","severity":"high","contact":"jane@example.com"}'

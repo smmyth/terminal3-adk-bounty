@@ -122,14 +122,14 @@ npm run intake -- usage
 ```powershell
 $env:T3N_DEV_KEY = "0x<your-testnet-dev-key>"   # or use apps/agent-cli/.env
 pwsh -File scripts/demo.ps1
-# re-run when the contract is already registered at this version:
-pwsh -File scripts/demo.ps1 -ContractId <id-from-register>
 ```
 
 `scripts/demo.ps1` runs labelled steps 1–10 (auth → me → register → init-maps →
-grant → submit → summary → score → logs → usage), auto-capturing the `contract_id`
-from `register`. On a re-run at the same version, `register` returns a benign
-"version not higher" — the script prints a clean message and uses `-ContractId`.
+grant → submit → summary → score → logs → usage). `register` saves the allocated
+`contract_id` to a gitignored `apps/agent-cli/.contract-id`, so `init-maps` and
+re-runs find it automatically — on a re-run at the same version `register`
+reports a benign "version not higher" and the saved id is reused. Override the
+id if ever needed with `-ContractId <id>`.
 
 ---
 
