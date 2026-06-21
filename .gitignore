@@ -1,0 +1,11 @@
+# Rust
+**/target/
+
+# Node
+**/node_modules/
+**/dist/
+
+# Secrets — never commit the dev key
+.env
+*.key
+T3N_DEV_KEY*

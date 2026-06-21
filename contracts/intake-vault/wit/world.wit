@@ -1,0 +1,58 @@
+/// intake-vault WIT world — Confidential Intake Vault showcase.
+///
+/// A z-tenant TEE contract that ingests a sensitive submission and does ALL of
+/// the privacy-bearing work inside the enclave:
+///   - the RAW submission (which may carry PII) is written only to the tenant's
+///     private `reports` KV map — it never crosses the WIT boundary back out;
+///   - a completeness score and a REDACTED summary are computed in-enclave;
+///   - only the redacted summary + score are written to the public
+///     `summaries` map and returned to the caller.
+///
+/// Imported host capabilities (the WIT imports ARE the capability set — there
+/// is no separate manifest):
+///   - tenant-context: tenant DID (namespaces every KV map) + cluster timestamp
+///   - logging:        debug / info / error lines (never log raw submission)
+///   - kv-store:       reads/writes the `reports` (raw) and `summaries` (redacted) maps
+///
+/// KV maps are physically namespaced by the host as `z:<tid>:<map>`; the
+/// contract derives `<tid>` at runtime from `tenant-context.tenant-did()`.
+package z:intake-vault@0.1.0;
+
+world intake-vault {
+    import host:tenant/tenant-context@1.0.0;
+    import host:interfaces/logging@2.1.0;
+    import host:interfaces/kv-store@2.1.0;
+
+    export contracts;
+}
+
+interface contracts {
+    /// Standard 3-field envelope used by all contracts callable from the node.
+    /// `input`        — JSON-serialized request payload specific to the function.
+    /// `user-profile` — always None for tenant contracts (hardcoded at dispatch).
+    /// `context`      — JSON-serialized DynamicContext (node-minted, trusted).
+    record generic-input {
+        input:        option<list<u8>>,
+        user-profile: option<list<u8>>,
+        context:      option<list<u8>>,
+    }
+
+    /// Ingest a sensitive submission. The raw body is persisted to the private
+    /// `reports` map; a redacted summary is persisted to the public `summaries`
+    /// map. Returns ONLY the non-sensitive result.
+    /// Input  (JSON): { id, title, body, severity, contact }
+    /// Output (JSON): { id, score, severity, redacted_summary, submitted_at }
+    submit-report: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Recompute the completeness score for a stored report (reads the private
+    /// raw body in-enclave, returns only the numeric score + breakdown).
+    /// Input  (JSON): { id }
+    /// Output (JSON): { id, score, breakdown }
+    score-report: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Return the redacted public summary for a stored report. Safe to expose:
+    /// reads from the `summaries` map, never the raw `reports` map.
+    /// Input  (JSON): { id }
+    /// Output (JSON): { id, score, severity, redacted_summary, submitted_at }
+    get-summary: func(req: generic-input) -> result<list<u8>, string>;
+}

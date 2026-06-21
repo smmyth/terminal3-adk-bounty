@@ -1,0 +1,15 @@
+<svg width="480" height="480" viewBox="0 0 480 480" role="img" xmlns="http://www.w3.org/2000/svg"><title>Confidential Intake Vault logo</title><desc>A white document with redaction bars on a dark navy rounded-square badge, with a teal verified checkmark.</desc>
+<rect x="0" y="0" width="480" height="480" rx="104" fill="#0E1726"/>
+<rect x="26" y="26" width="428" height="428" rx="82" fill="none" stroke="#1E293B" stroke-width="3"/>
+<rect x="150" y="104" width="180" height="256" rx="18" fill="#FFFFFF"/>
+<rect x="150" y="104" width="180" height="40" rx="18" fill="#14B8A6"/>
+<rect x="150" y="126" width="180" height="18" fill="#14B8A6"/>
+<rect x="176" y="172" width="92" height="14" rx="7" fill="#CBD5E1"/>
+<rect x="176" y="204" width="128" height="13" rx="6" fill="#E2E8F0"/>
+<rect x="176" y="230" width="112" height="17" rx="4" fill="#0F172A"/>
+<rect x="176" y="262" width="128" height="13" rx="6" fill="#E2E8F0"/>
+<rect x="176" y="288" width="78" height="17" rx="4" fill="#0F172A"/>
+<rect x="176" y="320" width="120" height="13" rx="6" fill="#E2E8F0"/>
+<circle cx="332" cy="334" r="50" fill="#14B8A6" stroke="#0E1726" stroke-width="8"/>
+<path d="M308 334 L326 352 L358 314" fill="none" stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

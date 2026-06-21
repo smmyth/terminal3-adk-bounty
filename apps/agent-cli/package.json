@@ -1,0 +1,24 @@
+{
+  "name": "intake-vault-agent-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Confidential Intake Vault — agent CLI driving the intake-vault TEE contract over @terminal3/t3n-sdk on testnet.",
+  "bin": {
+    "intake": "./src/index.ts"
+  },
+  "scripts": {
+    "intake": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@terminal3/t3n-sdk": "^3.5.2"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
